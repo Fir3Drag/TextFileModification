@@ -1,3 +1,4 @@
+import numpy as np
 import pdfplumber
 import pandas as pd
 # openpyxl
@@ -5,34 +6,44 @@ import os
 from contextlib import redirect_stderr
 
 def createErrorMsg():
-    Msg = f"FileName: {fileName} has failed."
+    msg = f"FileName: {fileName} has failed."
 
     if not foundDate:
-        Msg += f"\n{invoiceDate}."
+        msg += f"\nInvoice Data: {invoiceDate}."
 
     if not foundInvoiceNum:
-        Msg += f"\n{invoiceNum}."
+        msg += f"Invoice Num\n{invoiceNum}."
 
     if not foundDate or not foundInvoiceNum:
-        Msg += f"\nFirstPageText\n{firstPageText}"
+        msg += f"\nFirstPageText\n{firstPageText}"
 
-    return Msg
+    return msg
+
+def getTables(firstPage, lastPage):
+    for pageNum in range(firstPage - 1, lastPage):  # checks the selected pages
+        table = pdf.pages[pageNum].extract_table()
+
+        if table is not None:
+            df = pd.DataFrame(table[1:], columns=table[0]).replace(["None", ""], pd.NA)
+
+            if not df.isna().all().all():
+                tables.append(pd.DataFrame(table[1:], columns=table[0]))
 
 
 # CHANGE
-blankLineCount = 1  # amount of blank lines between each pdf
-firstTablePage = 3  # range of pages to load the table from
-lastTablePage = 4   # range of pages to load the table from
-wordAfterVAT = "Test"
+blankLineCount = 0  # amount of blank lines between each pdf
+wordAfterVAT = "Total"
+columnWithVAT = 9
 
 # DON'T CHANGE
 invoiceData = []; errorMsgs = []
-fileCount = 1; rowCount = 0; colCount = 0
+fileCount = 1; vatRowCount = 0; vatColCount = 0; errorsRowCount = 0
+currentDir = os.path.dirname(os.path.abspath(__file__))
 
-if not os.path.exists(os.getcwd() + "\\pdfs"):  # checks the folder pdfs exists
+if not os.path.exists(currentDir + "\\pdfs"):  # checks the folder pdfs exists
     os.mkdir("pdfs")
 
-files = os.listdir(os.getcwd() + "\\pdfs")
+files = os.listdir(currentDir + "\\pdfs")
 
 if len(files) == 0:  # handle no pdfs
     print("No pdfs found")
@@ -44,103 +55,113 @@ with open(os.devnull, "w") as fNull:  # remove error msgs
             print(f"File {fileCount}/{len(files)}")  # progress update
             fileCount+=1
 
-            invoiceDate = f"Can't find invoice date in '{fileName}'"; invoiceNum = f"Can't find invoice no in '{fileName}'"
+            invoiceDate = f"Not Found"; invoiceNum = f"Not Found"
             tables = []
             foundDate = False; foundInvoiceNum = False
 
             if ".pdf" in fileName:
                     with pdfplumber.open("pdfs\\" + fileName) as pdf:
-                        if len(pdf.pages) >= lastTablePage:
-                            firstPageText = pdf.pages[0].extract_text().split("\n")
+                        firstPageText = pdf.pages[0].extract_text().split("\n")
 
-                            try:
-                                for textRow in firstPageText:  # loops through each row of text in the first page
-                                    textRowSpace = textRow.split(" ")  # split into spaces to try and just the date / num
+                        try:
+                            for textRow in firstPageText:  # loops through each row of text in the first page
+                                textRowSpace = textRow.split(" ")  # split into spaces to try and just the date / num
 
-                                    if "DATE" in textRow.upper() or "TAX POINT" in textRow.upper():  # get date row text
-                                        if len(textRowSpace) > 3:
-                                            for textSpace in textRowSpace:
-                                                if textSpace[0].isdigit():
-                                                    invoiceDate = f"{textSpace} {textRowSpace[textRowSpace.index(textSpace)+1]} {textRowSpace[textRowSpace.index(textSpace)+2]}"
-                                                    break
-                                        else:
-                                            invoiceDate = textRow
-                                        foundDate = True
+                                if "DATE" in textRow.upper() or "TAX POINT" in textRow.upper():  # get date row text
+                                    if len(textRowSpace) > 3:
+                                        for textSpace in textRowSpace:
+                                            if textSpace[0].isdigit():
+                                                invoiceDate = f"{textSpace} {textRowSpace[textRowSpace.index(textSpace)+1]} {textRowSpace[textRowSpace.index(textSpace)+2]}"
+                                                break
+                                    else:
+                                        invoiceDate = textRow
+                                    foundDate = True
 
-                                    if "INVOICE NO" in textRow.upper():  # get invoice num row text
-                                        if len(textRowSpace) > 2:
-                                            for textSpace in textRowSpace:
-                                                if textSpace[0].isdigit():
-                                                    invoiceNum = textSpace
+                                if "INVOICE NO" in textRow.upper():  # get invoice num row text
+                                    if len(textRowSpace) > 2:
+                                        for textSpace in textRowSpace:
+                                            if textSpace[0].isdigit():
+                                                invoiceNum = textSpace
 
-                                        else:
-                                            invoiceNum = textRow
-                                        foundInvoiceNum = True
+                                    else:
+                                        invoiceNum = textRow
+                                    foundInvoiceNum = True
 
-                                dfFileName = pd.DataFrame({"": [fileName]})
-                                dfDate = pd.DataFrame({"": [invoiceDate]})
-                                dfInvoiceNum = pd.DataFrame({"": [invoiceNum]})
+                            dfFileName = pd.DataFrame({"": [fileName]})
+                            dfDate = pd.DataFrame({"": [invoiceDate]})
+                            dfInvoiceNum = pd.DataFrame({"": [invoiceNum]})
 
-                                for pageNum in range(firstTablePage-1, lastTablePage):  # checks the selected pages
-                                    table = pdf.pages[pageNum].extract_table()
+                            if len(pdf.pages) >= 5:
+                                getTables(2,5) # checks pages 3 to 5
 
-                                    if table is not None:
-                                        if len(table) > 0:
-                                            tables.append(pd.DataFrame(table[1:], columns=table[0]))
+                            elif len(pdf.pages) == 4:
+                                getTables(2,4) # checks pages 3 to 4
 
-                                if len(tables) > 1:  # if there are more than one table combines them
-                                    dfTables = pd.concat(tables, ignore_index=True)
-                                    invoiceData.append([dfFileName, dfDate, dfInvoiceNum, dfTables])
+                            else:
+                                errorMsgs.append(f"\nPdf file '{fileName}' has failed because it is less than 4 pages.")
 
-                                elif len(tables) == 1:  # if only one table just adds that
-                                    invoiceData.append([dfFileName, dfDate, dfInvoiceNum, tables[0]])
+                            if len(tables) > 1:  # if there are more than one table combines them
+                                dfTables = pd.concat(tables, ignore_index=True)
+                                invoiceData.append([dfFileName, dfDate, dfInvoiceNum, dfTables])
 
-                                else:  # deals with no tables being found
-                                    invoiceData.append([dfFileName, dfDate, dfInvoiceNum, pd.DataFrame({"": [f"Error with file table: '{fileName}'"]})])
-                                    errorMsg = createErrorMsg()
-                                    errorMsg += f"\nCan't find tables\nPage 3: {pdf.pages[2].extract_text().split("\n")}\nPage 4: {pdf.pages[3].extract_text().split("\n")}\nPage 5: {pdf.pages[4].extract_text().split("\n")}"
-                                    errorMsgs.append(errorMsg)
+                            elif len(tables) == 1:  # if only one table just adds that
+                                invoiceData.append([dfFileName, dfDate, dfInvoiceNum, tables[0]])
 
-                            except Exception as e:  # stores error info
-                                dfError = pd.DataFrame({"": [f"Error with file: '{fileName}'", e]})
-                                invoiceData.append([dfError])
+                            else:  # deals with no tables being found
+                                invoiceData.append([dfFileName, dfDate, dfInvoiceNum, pd.DataFrame({"": [f"Error with file table: '{fileName}'"]}), "Placeholder so that the length is 5 for error reasons"])
                                 errorMsg = createErrorMsg()
-                                errorMsg += f"\nPython error: '{e}'"
+                                errorMsg += f"\nCan't find tables"
                                 errorMsgs.append(errorMsg)
 
-                        else:
-                            errorMsgs.append(f"Pdf file '{fileName}' has failed because it is too short and cannot read all table pages.")
+                        except Exception as e:  # stores error info
+                            dfError = pd.DataFrame({"": [f"Error with file: '{fileName}'", e]})
+                            invoiceData.append([dfError])
+                            errorMsg = createErrorMsg()
+                            errorMsg += f"\nPython error: '{e}'"
+                            errorMsgs.append(errorMsg)
+
 
 while True:  # allows the user to rewrite if they are in the file
     if len(invoiceData) > 0:  # checks there is data to write
         try:
             with pd.ExcelWriter("output.xlsx", engine="openpyxl") as writer:  # writes the data to output file
+                # write headers
+                pd.DataFrame({"": ["FileName"]}).to_excel(writer, sheet_name="VAT", index=False, startrow=0, startcol=0, header=False)
+                pd.DataFrame({"": ["Invoice Date"]}).to_excel(writer, sheet_name="VAT", index=False, startrow=0, startcol=1, header=False)
+                pd.DataFrame({"": ["Invoice number"]}).to_excel(writer, sheet_name="VAT", index=False, startrow=0, startcol=2, header=False)
+                pd.DataFrame({"": ["VAT"]}).to_excel(writer, sheet_name="VAT", index=False, startrow=0, startcol=columnWithVAT+3, header=False)
+
                 for data in invoiceData:  # displays the data
                     if len(data) == 4:
+                        table = data[3].apply(lambda col: col.str.replace("\n", "", regex=False) if col.dtype == "object" else col)
+
                         for i in range(1, len(data[3])+1):  # put the date and invoice num on each row of the table (starts at 1 cos headers start at 0)
-                            data[0].to_excel(writer, index=False, startrow=rowCount+i, startcol=0, header=False)  # filename
-                            data[1].to_excel(writer, index=False, startrow=rowCount+i, startcol=1, header=False)  # date
-                            data[2].to_excel(writer, index=False, startrow=rowCount+i, startcol=2, header=False)  # invoice num
+                            data[0].to_excel(writer, index=False, sheet_name="VAT", startrow=vatRowCount + i, startcol=0, header=False)  # filename
+                            data[1].to_excel(writer, index=False, sheet_name="VAT", startrow=vatRowCount + i, startcol=1, header=False)  # date
+                            data[2].to_excel(writer, index=False, sheet_name="VAT", startrow=vatRowCount + i, startcol=2, header=False)  # invoice num
 
-                            cell = data[3].iloc[rowCount+i-1,len(data[3].columns)-1].replace("\n", "")
-                            vatCell = float(cell[cell.find("VAT")+5:cell.find(wordAfterVAT)])
-                            pd.DataFrame({"": [vatCell]}).to_excel(writer, index=False, startrow=rowCount+i, startcol=3 + len(data[3].columns), header=False)  # vat column
+                            # extracting the VAT as a separate column
+                            tableTemp = table.apply(lambda col: col.str.replace(",", "", regex=False) if col.dtype == "object" else col)
 
-                        # write headers
-                        pd.DataFrame({"": ["FileName"]}).to_excel(writer, index=False, startrow=rowCount, startcol=0, header=False)
-                        pd.DataFrame({"": ["Invoice Date"]}).to_excel(writer, index=False, startrow=rowCount, startcol=1, header=False)
-                        pd.DataFrame({"": ["Invoice number"]}).to_excel(writer, index=False, startrow=rowCount, startcol=2, header=False)
-                        pd.DataFrame({"": ["VAT"]}).to_excel(writer, index=False, startrow=rowCount, startcol=3 + len(data[3].columns), header=False)
+                            try:
+                                cell = tableTemp.iloc[i-1, columnWithVAT]
+
+                                if cell is not None and cell.find("VAT") != -1 and cell.find(wordAfterVAT) != -1:
+                                    vatCell = float(cell[cell.find("VAT")+6:cell.find(wordAfterVAT)])
+                                    pd.DataFrame({"": [vatCell]}).to_excel(writer, sheet_name="VAT", index=False, startrow=vatRowCount + i, startcol=3 + len(tableTemp.columns), header=False)  # vat column
+
+                            except Exception as e:
+                                pass
+                                # print(f"Failed finding VAT: {e}")
 
                         # table
-                        data[3] = data[3].apply(lambda col: col.str.replace('\n', '', regex=False) if col.dtype == 'object' else col)  # removes new lines
-                        data[3].to_excel(writer, index=False, startrow=rowCount, startcol=3)
-                        rowCount +=len(data[3]) + blankLineCount
+                        table.to_excel(writer, sheet_name="VAT", index=False, startrow=vatRowCount, startcol=3)
+                        vatRowCount += len(table) + blankLineCount
 
                 for data in invoiceData:  # displays the errors at the end
-                    if len(data) == 1:
-                        data[0].to_excel(writer, index=False, startrow=rowCount, startcol=0, header=False)
-                        rowCount += blankLineCount
+                    if len(data) == 1 or len(data) == 5:
+                        data[0].to_excel(writer, sheet_name="Errors", index=False, startrow=errorsRowCount, startcol=0, header=False)
+                        vatRowCount += blankLineCount
             break
 
         except Exception as e:
@@ -150,8 +171,14 @@ while True:  # allows the user to rewrite if they are in the file
     else:
         break
 
+file = open("log.txt", "w")
+
 for errorMsg in errorMsgs:
     print(errorMsg)
+    file.writelines(errorMsg)
 
 if len(errorMsgs) > 0:
     print(f"\nFailed Files: {len(errorMsgs)}")
+    file.writelines(f"\nFailed Files: {len(errorMsgs)}")
+
+file.close()
