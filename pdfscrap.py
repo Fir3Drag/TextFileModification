@@ -1,9 +1,11 @@
-import numpy as np
 import pdfplumber
 import pandas as pd
 # openpyxl
 import os
 from contextlib import redirect_stderr
+import easyocr
+from PIL import Image
+import numpy as np
 
 def createErrorMsg():
     msg = f"FileName: {fileName} has failed."
@@ -12,7 +14,7 @@ def createErrorMsg():
         msg += f"\nInvoice Data: {invoiceDate}."
 
     if not foundInvoiceNum:
-        msg += f"Invoice Num\n{invoiceNum}."
+        msg += f"\nInvoice Num: {invoiceNum}."
 
     if not foundDate or not foundInvoiceNum:
         msg += f"\nFirstPageText\n{firstPageText}"
@@ -108,13 +110,46 @@ with open(os.devnull, "w") as fNull:  # remove error msgs
                                 invoiceData.append([dfFileName, dfDate, dfInvoiceNum, tables[0]])
 
                             else:  # deals with no tables being found
-                                invoiceData.append([dfFileName, dfDate, dfInvoiceNum, pd.DataFrame({"": [f"Error with file table: '{fileName}'"]}), "Placeholder so that the length is 5 for error reasons"])
-                                errorMsg = createErrorMsg()
-                                errorMsg += f"\nCan't find tables"
-                                errorMsgs.append(errorMsg)
+                                # invoiceData.append([dfFileName, dfDate, dfInvoiceNum, pd.DataFrame({"": [f"Error with file table: '{fileName}'"]}), "Placeholder so that the length is 5 for error reasons"])
+                                # errorMsg = createErrorMsg()
+                                # errorMsg += f"\nCan't find tables"
+                                # errorMsgs.append(errorMsg)
+
+                                reader = easyocr.Reader(['en'])
+                                image = pdf.pages[2].to_image(resolution=400)
+                                pil_image = image.original
+                                open_cv_image = np.array(pil_image)
+                                result = reader.readtext(open_cv_image)
+
+                                result.sort(key=lambda x: x[0][0][1])  # Sort the results based on the y-coordinate (helps with row detection)
+
+                                # Group the text into rows based on y-coordinate
+                                rows = []
+                                current_row = []
+                                previous_y = None
+                                row_threshold = 10  # Threshold to consider if a new line belongs to the same row
+
+                                for detection in result:
+                                    text = detection[1]
+                                    y = detection[0][0][1]  # Get the y-coordinate of the text
+
+                                    # If the y-coordinate difference is large, it indicates a new row
+                                    if previous_y is None or abs(previous_y - y) > row_threshold:
+                                        if current_row:
+                                            rows.append(current_row)  # Save the current row
+                                        current_row = [text]  # Start a new row
+                                    else:
+                                        current_row.append(text)  # Add the text to the current row
+
+                                    previous_y = y
+
+                                if current_row:  # Append the last row after finishing the loop
+                                    rows.append(current_row)
+
+                                invoiceData.append([dfFileName, dfDate, dfInvoiceNum, pd.DataFrame(rows)])
 
                         except Exception as e:  # stores error info
-                            dfError = pd.DataFrame({"": [f"Error with file: '{fileName}'", e]})
+                            dfError = pd.DataFrame({"": [f"\nError with file: '{fileName}'", e]})
                             invoiceData.append([dfError])
                             errorMsg = createErrorMsg()
                             errorMsg += f"\nPython error: '{e}'"
@@ -166,7 +201,7 @@ while True:  # allows the user to rewrite if they are in the file
 
         except Exception as e:
             print(e)
-            input("If the file is open, close it and press enter\n")
+            input("\nIf the file is open, close it and press enter")
 
     else:
         break
